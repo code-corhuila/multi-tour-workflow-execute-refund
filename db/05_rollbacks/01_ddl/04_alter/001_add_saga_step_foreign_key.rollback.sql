@@ -1,0 +1,1 @@
+ALTER TABLE workflow_execute_refund.execute_refund_saga_step DROP CONSTRAINT IF EXISTS fk_execute_refund_saga_step_saga;

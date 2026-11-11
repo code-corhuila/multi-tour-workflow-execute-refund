@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS workflow_execute_refund.idx_execute_refund_saga_status_updated_at;

@@ -23,7 +23,7 @@ In PostgreSQL, schema `workflow_execute_refund` of the single instance (ADR-005 
 
 ## What is missing
 
-Task WF3-01 gives the configuration and the health of the service, then the schema and the domain of the saga. The steps, the participant clients and the entry route (`POST /api/v1/sagas/execute-refund`) are tasks WF3-02 and WF3-03.
+The steps, the participant clients and the entry route (`POST /api/v1/sagas/execute-refund`) are tasks WF3-02 and WF3-03; the domain of the saga is part 3 of WF3-01.
 
 ## Branching
 

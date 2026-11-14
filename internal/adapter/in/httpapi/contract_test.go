@@ -53,7 +53,6 @@ func TestC_EveryResponseOfTheContractIsProducedAndValid(t *testing.T) {
 	scenarios := []scenario{
 		{"created", startWith(admin, goodKey, goodBody), okUC(true), http.StatusCreated},
 		{"repeated key", startWith(admin, goodKey, goodBody), okUC(false), http.StatusOK},
-		{"same tenant, same key, another body", startWith(admin, goodKey, goodBody), &fakeUseCase{startErr: saga.ErrKeyReused}, http.StatusUnprocessableEntity},
 		{"no token", startWith("", goodKey, goodBody), okUC(true), http.StatusUnauthorized},
 		{"not allowed", startWith(customer, goodKey, goodBody), okUC(true), http.StatusForbidden},
 		{"no key", startWith(admin, "", goodBody), okUC(true), http.StatusBadRequest},

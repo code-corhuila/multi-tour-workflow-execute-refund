@@ -126,10 +126,26 @@ func (f *fakeReservations) CompleteExecution(_ context.Context, call out.Call, _
 	return f.completeErr
 }
 
+// fakeLookup stands for the read of the refund (G-WF3-4) that follows an unknown outcome of step 3.
+type fakeLookup struct {
+	journal *[]string
+	state   out.RefundState
+	err     error
+}
+
+func (f *fakeLookup) RefundStatus(_ context.Context, tenantID, refundAuthorizationID string) (out.RefundState, error) {
+	*f.journal = append(*f.journal, "lookup")
+	if tenantID != tenant || refundAuthorizationID != auth {
+		return out.RefundState{}, fmt.Errorf("unexpected lookup %s %s", tenantID, refundAuthorizationID)
+	}
+	return f.state, f.err
+}
+
 type rig struct {
 	store    *memoryStore
 	cash     *fakeCash
 	bookings *fakeReservations
+	lookup   *fakeLookup
 	journal  *[]string
 	log      *bytes.Buffer
 	job      *usecase.ExecuteRefund
@@ -138,9 +154,9 @@ type rig struct {
 func newRig() *rig {
 	journal := &[]string{}
 	r := &rig{store: newStore(), journal: journal, log: &bytes.Buffer{}}
-	r.cash, r.bookings = &fakeCash{journal: journal}, &fakeReservations{journal: journal}
+	r.cash, r.bookings, r.lookup = &fakeCash{journal: journal}, &fakeReservations{journal: journal}, &fakeLookup{journal: journal}
 	n := 0
-	r.job = usecase.NewExecuteRefund(r.store, r.cash, r.bookings, slog.New(correlation.NewLogHandler(slog.NewJSONHandler(r.log, nil))),
+	r.job = usecase.NewExecuteRefund(r.store, r.cash, r.bookings, r.lookup, slog.New(correlation.NewLogHandler(slog.NewJSONHandler(r.log, nil))),
 		func() string { n++; return fmt.Sprintf("saga-%d", n) }, func() time.Time { return clock }, time.Minute)
 	return r
 }
@@ -220,10 +236,11 @@ func TestA_an_unknown_outflow_outcome_is_left_failed(t *testing.T) {
 	}
 }
 
-// AC-WF3-04: a completion that fails after the outflow reverses the outflow and then undoes the start.
-func TestA_a_failed_completion_reverses_the_outflow_and_undoes_the_start(t *testing.T) {
+// AC-WF3-04 (option B): a completion refused for good (4xx) reverses the outflow and undoes the start, without reading
+// the refund.
+func TestA_a_refused_completion_is_compensated_without_reading_the_refund(t *testing.T) {
 	r := newRig()
-	r.bookings.completeErr = errors.New("503")
+	r.bookings.completeErr = rejection("VALIDATION_ERROR")
 
 	s, _, _ := r.job.Start(context.Background(), command())
 
@@ -232,6 +249,70 @@ func TestA_a_failed_completion_reverses_the_outflow_and_undoes_the_start(t *test
 	}
 	if !s.Steps[0].Compensated || !s.Steps[1].Compensated {
 		t.Errorf("steps = %+v", s.Steps)
+	}
+}
+
+// AC-WF3-04 (option B): an unknown completion that the reservation shows EXECUTED with the movement of step 2 completes
+// the saga; nothing is reversed.
+func TestA_an_unknown_completion_found_executed_completes(t *testing.T) {
+	r := newRig()
+	r.bookings.completeErr = errors.New("timeout")
+	r.lookup.state = out.RefundState{ExecutionState: out.RefundExecuted, CashMovementID: "mov-1"}
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Completed || s.FailedStep != "" || calls(r) != "start,outflow,complete:mov-1,lookup" {
+		t.Errorf("saga %+v err %v calls %s", s, err, calls(r))
+	}
+	if !s.Done(saga.CompleteExecution) || s.Compensated(saga.RecordCashOutflow) {
+		t.Errorf("steps = %+v", s.Steps)
+	}
+}
+
+// AC-WF3-04 (option B): an unknown completion that the reservation shows not executed (EXECUTING after step 1, or
+// AUTHORIZED) reverses the outflow and undoes the start.
+func TestA_an_unknown_completion_found_not_executed_is_compensated(t *testing.T) {
+	for _, state := range []string{out.RefundExecuting, out.RefundAuthorized} {
+		r := newRig()
+		r.bookings.completeErr = &saga.ParticipantError{Code: "PARTICIPANT_UNAVAILABLE", Message: "the participant answered 503"}
+		r.lookup.state = out.RefundState{ExecutionState: state}
+
+		s, _, _ := r.job.Start(context.Background(), command())
+
+		if s.Status != saga.Compensated || s.FailedStep != saga.CompleteExecution ||
+			calls(r) != "start,outflow,complete:mov-1,lookup,reverse:mov-1,undo" {
+			t.Errorf("%s: saga %+v calls %s", state, s, calls(r))
+		}
+	}
+}
+
+// AC-WF3-04 (option B), norm section 5.8: when the read fails too, nothing is reversed nor undone and a person decides.
+func TestA_an_unknown_completion_whose_read_fails_is_left_failed(t *testing.T) {
+	r := newRig()
+	r.bookings.completeErr = errors.New("timeout")
+	r.lookup.err = &saga.ParticipantError{Code: "STATUS_LOOKUP_UNAVAILABLE", Message: "the refund could not be read"}
+
+	s, _, err := r.job.Start(context.Background(), command())
+
+	if err != nil || s.Status != saga.Failed || s.FailedStep != saga.CompleteExecution || calls(r) != "start,outflow,complete:mov-1,lookup" {
+		t.Errorf("saga %+v err %v calls %s", s, err, calls(r))
+	}
+	if s.Compensated(saga.RecordCashOutflow) || s.Compensated(saga.StartExecution) || s.FailureDetail == "" {
+		t.Errorf("saga %+v", s)
+	}
+}
+
+// AC-WF3-04 (option B): EXECUTED with a movement other than the one of step 2 is not the outcome of this saga; a person
+// decides.
+func TestA_an_unknown_completion_executed_with_another_movement_is_left_failed(t *testing.T) {
+	r := newRig()
+	r.bookings.completeErr = errors.New("timeout")
+	r.lookup.state = out.RefundState{ExecutionState: out.RefundExecuted, CashMovementID: "mov-other"}
+
+	s, _, _ := r.job.Start(context.Background(), command())
+
+	if s.Status != saga.Failed || s.FailedStep != saga.CompleteExecution || calls(r) != "start,outflow,complete:mov-1,lookup" {
+		t.Errorf("saga %+v calls %s", s, calls(r))
 	}
 }
 

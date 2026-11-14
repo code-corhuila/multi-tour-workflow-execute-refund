@@ -223,3 +223,36 @@ func TestI_a_redirect_is_not_followed(t *testing.T) {
 		t.Errorf("err %v hits %d", err, hits.Load())
 	}
 }
+
+// G-WF3-4: until the commercial api serves the read of a refund, the lookup answers an unknown failure, so an unknown
+// step 3 ends FAILED for a person instead of reversing the outflow blind (AC-WF3-04, option B).
+func TestI_the_refund_status_lookup_is_unavailable_until_the_route_exists(t *testing.T) {
+	_, err := participants.RefundStatusUnavailable{}.RefundStatus(ctx(), tenant, auth)
+
+	var p *saga.ParticipantError
+	if !errors.As(err, &p) || p.Definitive || p.Code != "STATUS_LOOKUP_UNAVAILABLE" {
+		t.Errorf("err %v", err)
+	}
+}
+
+// Cash timeout of step 2: an attempt that does not answer within the per-attempt timeout is retried and then is an
+// unknown outcome, never a rejection (characterization of the existing client).
+func TestI_a_participant_that_does_not_answer_in_time_is_unknown(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := participants.NewCash(srv.URL, participants.Config{Token: token, Timeout: 50 * time.Millisecond, Attempts: 2}).
+		RecordRefund(ctx(), call, tenant, refund())
+
+	var p *saga.ParticipantError
+	if !errors.As(err, &p) || p.Definitive || p.Code != "PARTICIPANT_UNAVAILABLE" || calls.Load() != 2 {
+		t.Errorf("err %v calls %d", err, calls.Load())
+	}
+}

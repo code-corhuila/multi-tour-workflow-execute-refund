@@ -21,15 +21,16 @@ type ExecuteRefund struct {
 	store        out.Store
 	cash         out.Cash
 	reservations out.Reservations
+	lookup       out.RefundStatusLookup
 	log          *slog.Logger
 	newID        func() string
 	now          func() time.Time
 	bound        time.Duration // longest a started saga may run, independent of the caller
 }
 
-func NewExecuteRefund(store out.Store, cash out.Cash, reservations out.Reservations,
+func NewExecuteRefund(store out.Store, cash out.Cash, reservations out.Reservations, lookup out.RefundStatusLookup,
 	log *slog.Logger, newID func() string, now func() time.Time, bound time.Duration) *ExecuteRefund {
-	return &ExecuteRefund{store, cash, reservations, log, newID, now, bound}
+	return &ExecuteRefund{store, cash, reservations, lookup, log, newID, now, bound}
 }
 
 var _ in.ExecuteRefund = (*ExecuteRefund)(nil)

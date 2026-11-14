@@ -21,15 +21,16 @@ type ExecuteRefund struct {
 	store        out.Store
 	cash         out.Cash
 	reservations out.Reservations
+	lookup       out.RefundStatusLookup
 	log          *slog.Logger
 	newID        func() string
 	now          func() time.Time
 	bound        time.Duration // longest a started saga may run, independent of the caller
 }
 
-func NewExecuteRefund(store out.Store, cash out.Cash, reservations out.Reservations,
+func NewExecuteRefund(store out.Store, cash out.Cash, reservations out.Reservations, lookup out.RefundStatusLookup,
 	log *slog.Logger, newID func() string, now func() time.Time, bound time.Duration) *ExecuteRefund {
-	return &ExecuteRefund{store, cash, reservations, log, newID, now, bound}
+	return &ExecuteRefund{store, cash, reservations, lookup, log, newID, now, bound}
 }
 
 var _ in.ExecuteRefund = (*ExecuteRefund)(nil)
@@ -96,8 +97,9 @@ func (e *ExecuteRefund) Resume(ctx context.Context, before time.Time) error {
 //	START_EXECUTION      none: a failure ends FAILED, nothing was changed
 //	RECORD_CASH_OUTFLOW  a definitive rejection undoes the start; an unknown outcome ends FAILED, because the money may
 //	                     have moved and a person has to decide
-//	COMPLETE_EXECUTION   any failure (the step is idempotent and the client already retried) reverses the outflow and
-//	                     then undoes the start
+//	COMPLETE_EXECUTION   a definitive rejection reverses the outflow and then undoes the start; an unknown outcome
+//	                     (the client already retried) reads the refund first: EXECUTED with the movement completes,
+//	                     EXECUTING or AUTHORIZED compensates, a failed read or another answer ends FAILED (option B)
 //
 // Crash window: if the process stops after a participant answered and before the save that follows, the step is not
 // recorded; the resume repeats it with the same key, which the participant answers as a replay.
@@ -131,6 +133,12 @@ func (e *ExecuteRefund) run(ctx context.Context, s *saga.Saga) error {
 	}
 	if !s.Done(saga.CompleteExecution) {
 		err := e.reservations.CompleteExecution(ctx, call(saga.CompleteExecution), s.TenantID, s.Refund.RefundAuthorizationID, s.CashMovementID)
+		if err != nil && !definitive(err) {
+			err = e.settleUnknownCompletion(ctx, s, err)
+			if err != nil && !definitive(err) {
+				return e.abort(ctx, s, saga.CompleteExecution, err, false)
+			}
+		}
 		if err != nil {
 			return e.abort(ctx, s, saga.CompleteExecution, err, true)
 		}
@@ -138,6 +146,23 @@ func (e *ExecuteRefund) run(ctx context.Context, s *saga.Saga) error {
 	}
 	s.End(saga.Completed, "", "")
 	return e.finish(ctx, s)
+}
+
+// settleUnknownCompletion reads the refund after step 3 left its outcome unknown (AC-WF3-04, option B). It answers nil
+// when the refund is EXECUTED with the movement of step 2 (step 3 took effect), a definitive error when the refund is
+// not executed (compensate), and an unknown error when the read fails or answers anything else (a person decides).
+func (e *ExecuteRefund) settleUnknownCompletion(ctx context.Context, s *saga.Saga, cause error) error {
+	state, err := e.lookup.RefundStatus(ctx, s.TenantID, s.Refund.RefundAuthorizationID)
+	if err != nil {
+		return &saga.ParticipantError{Code: codeOf(cause), Message: "step 3 outcome unknown and the refund could not be read: " + codeOf(err)}
+	}
+	switch {
+	case state.ExecutionState == out.RefundExecuted && state.CashMovementID == s.CashMovementID:
+		return nil
+	case state.ExecutionState == out.RefundExecuting || state.ExecutionState == out.RefundAuthorized:
+		return &saga.ParticipantError{Code: codeOf(cause), Message: "step 3 outcome unknown; the refund is " + state.ExecutionState, Definitive: true}
+	}
+	return &saga.ParticipantError{Code: "UNEXPECTED_REFUND_STATE", Message: "step 3 outcome unknown; the refund is in an unexpected state"}
 }
 
 // abort ends the saga after a step did not succeed. When compensate is false the work may exist and a person decides.

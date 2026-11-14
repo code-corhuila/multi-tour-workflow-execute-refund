@@ -72,6 +72,26 @@ func TestI_Create_with_an_existing_key_returns_the_existing_saga_not_created(t *
 	}
 }
 
+// AC-WF3-06 amended (DD-23): the key is unique per tenant. Another tenant with the same key gets a saga of its own, and
+// a repeat of that tenant returns its saga, never the one of the first tenant.
+func TestI_Create_keeps_the_key_per_tenant(t *testing.T) {
+	s, _ := newStore(t)
+	mustCreate(t, s, fresh(1, "key-refund-0001", t0))
+	other := fresh(2, "key-refund-0001", t0)
+	other.TenantID = "00000000-0000-4000-8000-0000000000a2"
+
+	got, created, err := s.Create(ctx, other)
+	if err != nil || !created || got.ID != sagaID(2) {
+		t.Fatalf("another tenant: created %v err %v saga %s", created, err, got.ID)
+	}
+	again := fresh(3, "key-refund-0001", t0.Add(time.Hour))
+	again.TenantID = other.TenantID
+	got, created, err = s.Create(ctx, again)
+	if err != nil || created || got.ID != sagaID(2) || got.TenantID != other.TenantID {
+		t.Errorf("repeat of the other tenant: created %v err %v saga %+v", created, err, got)
+	}
+}
+
 func TestI_Create_under_concurrency_inserts_once(t *testing.T) {
 	s, pool := newStore(t)
 	var wg sync.WaitGroup

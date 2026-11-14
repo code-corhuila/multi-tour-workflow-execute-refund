@@ -112,8 +112,8 @@ func (s *Saga) End(status Status, failed Step, detail string) {
 	s.Status, s.FailedStep, s.FailureDetail = status, failed, detail
 }
 
-// ErrKeyReused is returned when an Idempotency-Key already belongs to a saga of another tenant or of another request
-// body: a replay is only the same tenant sending the same refund again.
+// ErrKeyReused is returned when the tenant already used an Idempotency-Key for another request body: a replay is only
+// the same refund again. The key is unique per tenant (DD-23), so another tenant never gets this error.
 var ErrKeyReused = errors.New("the idempotency key was used for a different request")
 
 // Compensated says whether a recorded step was already undone.

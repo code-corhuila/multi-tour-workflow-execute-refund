@@ -13,6 +13,7 @@ import (
 	"github.com/code-corhuila/multi-tour-workflow-execute-refund/internal/application/port/in"
 	"github.com/code-corhuila/multi-tour-workflow-execute-refund/internal/application/port/out"
 	"github.com/code-corhuila/multi-tour-workflow-execute-refund/internal/application/usecase"
+	"github.com/code-corhuila/multi-tour-workflow-execute-refund/internal/correlation"
 	"github.com/code-corhuila/multi-tour-workflow-execute-refund/internal/domain/saga"
 )
 
@@ -139,7 +140,7 @@ func newRig() *rig {
 	r := &rig{store: newStore(), journal: journal, log: &bytes.Buffer{}}
 	r.cash, r.bookings = &fakeCash{journal: journal}, &fakeReservations{journal: journal}
 	n := 0
-	r.job = usecase.NewExecuteRefund(r.store, r.cash, r.bookings, slog.New(slog.NewJSONHandler(r.log, nil)),
+	r.job = usecase.NewExecuteRefund(r.store, r.cash, r.bookings, slog.New(correlation.NewLogHandler(slog.NewJSONHandler(r.log, nil))),
 		func() string { n++; return fmt.Sprintf("saga-%d", n) }, func() time.Time { return clock }, time.Minute)
 	return r
 }
@@ -304,5 +305,60 @@ func TestA_get_reads_the_saga_of_the_store(t *testing.T) {
 
 	if err != nil || got.ID != started.ID {
 		t.Errorf("got %+v err %v", got, err)
+	}
+}
+
+// D5: a resume after a crash in the middle of a compensation finishes the compensation; it does not run step 3 again.
+func TestA_a_resume_in_the_middle_of_a_compensation_does_not_complete_the_refund(t *testing.T) {
+	r := newRig()
+	old := clock.Add(-10 * time.Minute)
+	r.store.sagas["s-9"] = saga.Saga{ID: "s-9", Status: saga.Running, TenantID: tenant, OnBehalfOf: person, UpdatedAt: old,
+		Refund: command().Refund, CashMovementID: "mov-9",
+		Steps: []saga.StepState{{Name: saga.StartExecution}, {Name: saga.RecordCashOutflow, Compensated: true}}}
+
+	if err := r.job.Resume(context.Background(), clock.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	got := r.store.sagas["s-9"]
+	if got.Status != saga.Compensated || calls(r) != "undo" {
+		t.Errorf("saga %+v calls %s", got, calls(r))
+	}
+}
+
+// D1: the key replays only for the same tenant and the same refund; anything else is refused and shows nothing.
+func TestA_a_key_of_another_tenant_or_another_body_is_not_a_replay(t *testing.T) {
+	other := command()
+	other.TenantID = "99999999-9999-4999-8999-999999999999"
+	changed := command()
+	changed.Refund.AmountCents = 1
+	for name, cmd := range map[string]in.StartCommand{"another tenant": other, "another body": changed} {
+		r := newRig()
+		r.job.Start(context.Background(), command())
+		before := len(*r.journal)
+
+		s, created, err := r.job.Start(context.Background(), cmd)
+
+		if !errors.Is(err, saga.ErrKeyReused) || created || s.ID != "" || len(*r.journal) != before {
+			t.Errorf("%s: saga %+v created %v err %v", name, s, created, err)
+		}
+	}
+}
+
+// D3 and AC-WF3-09: the log of the saga shows the tenant, the saga id and the correlation id, and no secret.
+func TestA_the_log_carries_tenant_saga_and_correlation_id(t *testing.T) {
+	r := newRig()
+	ctx := correlation.With(context.Background(), "corr-0001")
+
+	r.job.Start(ctx, command())
+
+	logged := r.log.String()
+	for _, want := range []string{tenant, "saga-1", "corr-0001"} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the log lacks %q: %s", want, logged)
+		}
+	}
+	if strings.Contains(logged, "Cancelacion") {
+		t.Errorf("the free-text reason reached the log: %s", logged)
 	}
 }

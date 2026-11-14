@@ -111,3 +111,17 @@ func (s *Saga) MarkCompensated(step Step) {
 func (s *Saga) End(status Status, failed Step, detail string) {
 	s.Status, s.FailedStep, s.FailureDetail = status, failed, detail
 }
+
+// ErrKeyReused is returned when an Idempotency-Key already belongs to a saga of another tenant or of another request
+// body: a replay is only the same tenant sending the same refund again.
+var ErrKeyReused = errors.New("the idempotency key was used for a different request")
+
+// Compensated says whether a recorded step was already undone.
+func (s Saga) Compensated(step Step) bool {
+	for _, st := range s.Steps {
+		if st.Name == step && st.Compensated {
+			return true
+		}
+	}
+	return false
+}

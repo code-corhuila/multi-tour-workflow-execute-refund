@@ -290,3 +290,12 @@ func TestA_the_correlation_id_is_reused_or_made_and_health_needs_no_token(t *tes
 		t.Errorf("status %d id %q", rec.Code, rec.Header().Get("X-Correlation-Id"))
 	}
 }
+
+// D1: a key that belongs to another tenant or another body is a 422 and shows no saga.
+func TestA_a_reused_key_answers_422_without_a_saga(t *testing.T) {
+	rec := post(server(&fakeUseCase{startErr: saga.ErrKeyReused}), token(t, signer, claims(nil)), goodKey, goodBody)
+
+	if rec.Code != http.StatusUnprocessableEntity || errorCode(t, rec) != "IDEMPOTENCY_KEY_REUSED" || strings.Contains(rec.Body.String(), sagaID) {
+		t.Errorf("status %d body %s", rec.Code, rec.Body)
+	}
+}

@@ -93,6 +93,16 @@ func TestC_TheServerLimitsAreExplicitAndOutlastTheLongestSaga(t *testing.T) {
 	}
 }
 
+// The longest saga is five step calls with every attempt plus the single read of the refund after an unknown step 3
+// (AC-WF3-04, option B): start, outflow, completion, read, reversal, undo.
+func TestC_TheBoundCoversTheReadOfTheRefund(t *testing.T) {
+	cfg, _ := loadConfig(env(nil))
+
+	if bound := sagaBound(cfg); bound < time.Duration(5*cfg.stepAttempts+1)*cfg.stepTimeout+sagaMargin {
+		t.Errorf("bound %v does not cover five steps with every attempt, one read and the margin", bound)
+	}
+}
+
 // A saga already started must be allowed to finish before the pool closes: the grace period outlasts the bound.
 func TestC_ShutdownWaitsForTheLongestSagaAndTheComposeGraceOutlastsIt(t *testing.T) {
 	cfg, _ := loadConfig(env(nil))

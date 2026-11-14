@@ -50,9 +50,9 @@ func run(log *slog.Logger) error {
 
 	participantCfg := participants.Config{Token: cfg.serviceToken, Timeout: cfg.stepTimeout, Attempts: cfg.stepAttempts, BaseDelay: retryBaseDelay}
 	bound := sagaBound(cfg)
+	reservations := participants.NewReservations(cfg.commercialURL, participantCfg)
 	execute := usecase.NewExecuteRefund(postgres.NewStore(pool),
-		participants.NewCash(cfg.cashURL, participantCfg), participants.NewReservations(cfg.commercialURL, participantCfg),
-		participants.RefundStatusUnavailable{},
+		participants.NewCash(cfg.cashURL, participantCfg), reservations, reservations,
 		log, correlation.NewID, time.Now, bound)
 
 	srv := newServer(cfg, httpapi.New(execute, httpapi.NewVerifier(key), log), bound)

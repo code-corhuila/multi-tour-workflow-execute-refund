@@ -16,8 +16,10 @@ const (
 	defaultStepAttempts = 3
 	maxStepTimeout      = 30 * time.Second
 	maxStepAttempts     = 5
-	// a saga calls the participants at most five times: start, outflow, complete, undo the start, reverse the outflow
+	// a saga calls the participants at most five times with every attempt: start, outflow, complete, undo the start,
+	// reverse the outflow; plus one read of the refund, a single attempt, after an unknown completion (option B)
 	callsPerSaga = 5
+	readsPerSaga = 1
 	// settling time added to the arithmetic bound: database saves between steps and the waits between attempts
 	sagaMargin = 10 * time.Second
 )
@@ -93,7 +95,7 @@ func valueOr(value, fallback string) string {
 
 // sagaBound is the longest a started saga may run: every call using every attempt, plus a margin.
 func sagaBound(cfg config) time.Duration {
-	return time.Duration(callsPerSaga*cfg.stepAttempts)*cfg.stepTimeout + sagaMargin
+	return time.Duration(callsPerSaga*cfg.stepAttempts+readsPerSaga)*cfg.stepTimeout + sagaMargin
 }
 
 // shutdownGrace is how long a stop waits for the sagas still running: the saga bound plus a little, so the pool is

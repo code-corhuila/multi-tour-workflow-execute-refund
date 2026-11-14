@@ -52,6 +52,7 @@ func run(log *slog.Logger) error {
 	bound := sagaBound(cfg)
 	execute := usecase.NewExecuteRefund(postgres.NewStore(pool),
 		participants.NewCash(cfg.cashURL, participantCfg), participants.NewReservations(cfg.commercialURL, participantCfg),
+		participants.RefundStatusUnavailable{},
 		log, correlation.NewID, time.Now, bound)
 
 	srv := newServer(cfg, httpapi.New(execute, httpapi.NewVerifier(key), log), bound)

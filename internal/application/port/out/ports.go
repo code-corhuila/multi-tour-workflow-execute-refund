@@ -29,6 +29,25 @@ type Reservations interface {
 	CompleteExecution(ctx context.Context, call Call, tenantID, refundAuthorizationID, movementID string) error
 }
 
+// Execution states of a refund in commercial-reservation (RefundExecutionState of its contract).
+const (
+	RefundAuthorized = "AUTHORIZED"
+	RefundExecuting  = "EXECUTING"
+	RefundExecuted   = "EXECUTED"
+)
+
+// RefundState is what the saga needs to know of a refund after an unknown outcome of step 3.
+type RefundState struct {
+	ExecutionState string
+	CashMovementID string // set when EXECUTED
+}
+
+// RefundStatusLookup reads a refund without changing it (HU-WFL-003 G-WF3-4, route PROPOSED in the commercial contract).
+// An error that is not a *saga.ParticipantError is treated as an unknown failure.
+type RefundStatusLookup interface {
+	RefundStatus(ctx context.Context, tenantID, refundAuthorizationID string) (RefundState, error)
+}
+
 // Store persists the saga. Create inserts a RUNNING saga or, when the idempotency key exists, returns that one
 // with created=false.
 type Store interface {

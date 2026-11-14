@@ -28,7 +28,7 @@ var clock = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 // memoryStore keeps the sagas by id and counts versions like the real store.
 type memoryStore struct {
 	sagas map[string]saga.Saga
-	keys  map[string]string
+	keys  map[string]string // by tenant and key, like uq_execute_refund_saga_tenant_idempotency_key
 }
 
 func newStore() *memoryStore {
@@ -36,10 +36,11 @@ func newStore() *memoryStore {
 }
 
 func (m *memoryStore) Create(_ context.Context, s saga.Saga) (saga.Saga, bool, error) {
-	if id, ok := m.keys[s.IdempotencyKey]; ok {
+	key := s.TenantID + "/" + s.IdempotencyKey
+	if id, ok := m.keys[key]; ok {
 		return m.sagas[id], false, nil
 	}
-	m.keys[s.IdempotencyKey], m.sagas[s.ID] = s.ID, s
+	m.keys[key], m.sagas[s.ID] = s.ID, s
 	return s, true, nil
 }
 
@@ -407,22 +408,33 @@ func TestA_a_resume_in_the_middle_of_a_compensation_does_not_complete_the_refund
 	}
 }
 
-// D1: the key replays only for the same tenant and the same refund; anything else is refused and shows nothing.
-func TestA_a_key_of_another_tenant_or_another_body_is_not_a_replay(t *testing.T) {
-	other := command()
-	other.TenantID = "99999999-9999-4999-8999-999999999999"
+// AC-WF3-06 amended (DD-23): the same tenant with the same key and another refund is refused and shows nothing.
+func TestA_the_same_key_with_another_body_is_refused(t *testing.T) {
 	changed := command()
 	changed.Refund.AmountCents = 1
-	for name, cmd := range map[string]in.StartCommand{"another tenant": other, "another body": changed} {
-		r := newRig()
-		r.job.Start(context.Background(), command())
-		before := len(*r.journal)
+	r := newRig()
+	r.job.Start(context.Background(), command())
+	before := len(*r.journal)
 
-		s, created, err := r.job.Start(context.Background(), cmd)
+	s, created, err := r.job.Start(context.Background(), changed)
 
-		if !errors.Is(err, saga.ErrKeyReused) || created || s.ID != "" || len(*r.journal) != before {
-			t.Errorf("%s: saga %+v created %v err %v", name, s, created, err)
-		}
+	if !errors.Is(err, saga.ErrKeyReused) || created || s.ID != "" || len(*r.journal) != before {
+		t.Errorf("saga %+v created %v err %v", s, created, err)
+	}
+}
+
+// AC-WF3-06 amended (DD-23): the key is per tenant, so another tenant with the same key starts its own saga; it is never
+// refused, which would tell it that another tenant used the key, and it never sees the first saga.
+func TestA_the_key_of_another_tenant_starts_its_own_saga(t *testing.T) {
+	other := command()
+	other.TenantID = "99999999-9999-4999-8999-999999999999"
+	r := newRig()
+	first, _, _ := r.job.Start(context.Background(), command())
+
+	s, created, err := r.job.Start(context.Background(), other)
+
+	if err != nil || !created || s.ID == first.ID || s.TenantID != other.TenantID || s.Status != saga.Completed {
+		t.Errorf("saga %+v created %v err %v", s, created, err)
 	}
 }
 

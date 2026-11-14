@@ -50,3 +50,20 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
             stripComments: false
+  - changeSet:
+      id: execute-refund-ddl-alter-004
+      author: FernandaRobayo
+      labels: "HU-WFL-003,ddl,alter"
+      comment: "The idempotency key is unique per tenant (AC-WF3-06 amended, DD-23)."
+      changes:
+        - sqlFile:
+            path: 004_idempotency_key_per_tenant.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/004_idempotency_key_per_tenant.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false

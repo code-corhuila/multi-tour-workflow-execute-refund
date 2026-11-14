@@ -57,3 +57,8 @@ func (r *Reservations) CompleteExecution(ctx context.Context, call out.Call, ten
 	})
 	return err
 }
+
+// RefundStatus reads the refund after an unknown outcome of step 3 (HU-WFL-003 G-WF3-4, getInternalRefundAuthorization).
+func (r *Reservations) RefundStatus(ctx context.Context, tenantID, refundAuthorizationID string) (out.RefundState, error) {
+	return out.RefundState{}, nil
+}

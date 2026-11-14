@@ -63,12 +63,15 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// request is one participant route; every one of them takes an Idempotency-Key, so a retry is the same intention.
+// request is one participant route. Every write takes an Idempotency-Key, so a retry is the same intention; a read
+// (method GET) has no body and no key.
 type request struct {
-	path string
-	key  string
-	body any
-	ok   []int
+	method   string // POST when empty
+	path     string
+	key      string
+	body     any
+	ok       []int
+	attempts int // the configured attempts when 0
 }
 
 var errorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,39}$`)
@@ -77,16 +80,25 @@ var errorCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,39}$`)
 // 5xx, with full jitter; what is left after the last attempt is an unknown outcome, because the participant may have
 // done the work. A 4xx is a clear rejection.
 func (c *client) post(ctx context.Context, r request) ([]byte, error) {
-	payload, err := json.Marshal(r.body)
-	if err != nil {
-		return nil, fmt.Errorf("encode the request: %w", err)
+	var payload []byte
+	if r.method == "" {
+		r.method = http.MethodPost
+		encoded, err := json.Marshal(r.body)
+		if err != nil {
+			return nil, fmt.Errorf("encode the request: %w", err)
+		}
+		payload = encoded
+	}
+	attempts := c.cfg.Attempts
+	if r.attempts > 0 {
+		attempts = r.attempts
 	}
 	corr := correlation.From(ctx)
 	if !correlation.Valid(corr) {
 		corr = correlation.NewID()
 	}
 	last := unknown("PARTICIPANT_UNAVAILABLE", "no answer from the participant")
-	for attempt := 1; attempt <= c.cfg.Attempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		if attempt > 1 {
 			ceiling := min(c.cfg.BaseDelay<<min(attempt-2, 10), maxBackoff)
 			if c.sleep(ctx, rand.N(ceiling+1)) != nil {
@@ -119,14 +131,22 @@ func transient(status int) bool {
 func (c *client) once(ctx context.Context, r request, payload []byte, corr string) (int, []byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+r.path, bytes.NewReader(payload))
+	var content io.Reader
+	if payload != nil {
+		content = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, r.method, c.baseURL+r.path, content)
 	if err != nil {
 		return 0, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Idempotency-Key", r.key)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if r.key != "" {
+		req.Header.Set("Idempotency-Key", r.key)
+	}
 	req.Header.Set("X-Correlation-Id", corr)
 	resp, err := c.http.Do(req)
 	if err != nil {

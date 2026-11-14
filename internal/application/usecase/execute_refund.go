@@ -43,10 +43,24 @@ func (e *ExecuteRefund) Start(ctx context.Context, cmd in.StartCommand) (saga.Sa
 	fresh := saga.Saga{ID: e.newID(), IdempotencyKey: cmd.IdempotencyKey, Status: saga.Running, TenantID: cmd.TenantID,
 		OnBehalfOf: cmd.OnBehalfOf, Refund: cmd.Refund, CreatedAt: now, UpdatedAt: now}
 	s, created, err := e.store.Create(ctx, fresh)
-	if err != nil || !created {
-		return s, false, err
+	if err != nil {
+		return saga.Saga{}, false, err
+	}
+	if !created {
+		// A replay is the same tenant sending the same refund again. The key is unique across tenants, so a key that
+		// belongs to another tenant or another refund must neither be answered nor reveal that saga.
+		if s.TenantID != cmd.TenantID || s.Refund != cmd.Refund {
+			return saga.Saga{}, false, saga.ErrKeyReused
+		}
+		return s, false, nil
 	}
 	return s, true, e.run(ctx, &s)
+}
+
+// logFor returns the logger of a saga: tenant and saga id on every line, never the refund data. The correlation id is
+// added by the handler of the logger from the context (correlation.NewLogHandler), so the core does not import it.
+func (e *ExecuteRefund) logFor(s saga.Saga) *slog.Logger {
+	return e.log.With("tenantId", s.TenantID, "sagaId", s.ID)
 }
 
 func (e *ExecuteRefund) Get(ctx context.Context, id string) (saga.Saga, error) {
@@ -67,7 +81,7 @@ func (e *ExecuteRefund) Resume(ctx context.Context, before time.Time) error {
 	for i := range stale {
 		err := e.run(ctx, &stale[i])
 		if errors.Is(err, saga.ErrConflict) || errors.Is(err, saga.ErrEnded) {
-			e.log.Info("saga moved or ended by another actor, left to it", "sagaId", stale[i].ID)
+			e.logFor(stale[i]).InfoContext(ctx, "saga moved or ended by another actor, left to it")
 			continue
 		}
 		if err != nil {
@@ -89,6 +103,12 @@ func (e *ExecuteRefund) Resume(ctx context.Context, before time.Time) error {
 // recorded; the resume repeats it with the same key, which the participant answers as a replay.
 func (e *ExecuteRefund) run(ctx context.Context, s *saga.Saga) error {
 	call := func(step saga.Step) out.Call { return out.Call{Key: s.StepKey(step), OnBehalfOf: s.OnBehalfOf} }
+
+	// A saga that was compensating when the process stopped has its outflow reversed: step 3 must not run again with
+	// that movement. Only a failed step 3 starts that reversal, so the compensation is taken up where it stopped.
+	if s.Compensated(saga.RecordCashOutflow) {
+		return e.abort(ctx, s, saga.CompleteExecution, errors.New("resumed during the compensation"), true)
+	}
 
 	if !s.Done(saga.StartExecution) {
 		if err := e.reservations.StartExecution(ctx, call(saga.StartExecution), s.TenantID, s.Refund, s.OnBehalfOf); err != nil {
@@ -129,7 +149,7 @@ func (e *ExecuteRefund) abort(ctx context.Context, s *saga.Saga, failed saga.Ste
 		s.End(saga.Failed, failed, detail)
 		return e.finish(ctx, s)
 	}
-	if s.Done(saga.RecordCashOutflow) {
+	if s.Done(saga.RecordCashOutflow) && !s.Compensated(saga.RecordCashOutflow) {
 		call := out.Call{Key: s.StepKey(saga.RecordCashOutflow) + ":undo", OnBehalfOf: s.OnBehalfOf}
 		if err := e.cash.ReverseRefund(ctx, call, s.TenantID, s.CashMovementID, reversalReason); err != nil {
 			return e.compensationFailed(ctx, s, failed, detail, saga.RecordCashOutflow, err)
@@ -150,7 +170,7 @@ func (e *ExecuteRefund) abort(ctx context.Context, s *saga.Saga, failed saga.Ste
 
 func (e *ExecuteRefund) compensationFailed(ctx context.Context, s *saga.Saga, failed saga.Step, detail string, step saga.Step, err error) error {
 	code := codeOf(err)
-	e.log.Warn("compensation failed", "sagaId", s.ID, "step", step, "code", code)
+	e.logFor(*s).WarnContext(ctx, "compensation failed", "step", step, "code", code)
 	s.End(saga.Failed, failed, detail+"; compensation of "+string(step)+" failed: "+code)
 	return e.finish(ctx, s)
 }
@@ -169,7 +189,7 @@ func (e *ExecuteRefund) finish(ctx context.Context, s *saga.Saga) error {
 	if err := e.save(ctx, s); err != nil {
 		return err
 	}
-	e.log.Info("saga ended", "sagaId", s.ID, "status", s.Status, "failedStep", s.FailedStep)
+	e.logFor(*s).InfoContext(ctx, "saga ended", "status", s.Status, "failedStep", s.FailedStep)
 	return nil
 }
 

@@ -123,6 +123,10 @@ func (h *handler) collection(w http.ResponseWriter, r *http.Request) {
 
 	started, created, err := h.uc.Start(r.Context(), in.StartCommand{IdempotencyKey: key, TenantID: claims.TenantID,
 		OnBehalfOf: claims.Subject, Refund: refund})
+	if errors.Is(err, saga.ErrKeyReused) {
+		writeError(w, r, http.StatusUnprocessableEntity, "IDEMPOTENCY_KEY_REUSED", "the Idempotency-Key was used for a different request")
+		return
+	}
 	if err != nil {
 		h.fail(w, r, "start the saga", err)
 		return

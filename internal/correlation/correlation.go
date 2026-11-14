@@ -35,5 +35,18 @@ func NewID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// NewLogHandler will add the correlation id to every record; for now it passes the records through.
-func NewLogHandler(inner slog.Handler) slog.Handler { return inner }
+// NewLogHandler wraps a slog handler so every record logged with a context that carries a correlation id shows it
+// as traceId (the name of the error envelope).
+func NewLogHandler(inner slog.Handler) slog.Handler { return logHandler{inner} }
+
+type logHandler struct{ slog.Handler }
+
+func (h logHandler) Handle(ctx context.Context, r slog.Record) error {
+	if id := From(ctx); id != "" {
+		r.AddAttrs(slog.String("traceId", id))
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h logHandler) WithAttrs(a []slog.Attr) slog.Handler { return logHandler{h.Handler.WithAttrs(a)} }
+func (h logHandler) WithGroup(n string) slog.Handler      { return logHandler{h.Handler.WithGroup(n)} }

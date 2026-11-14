@@ -15,7 +15,10 @@ const reservationsPrefix = "/api/v1/commercial-reservation/internal/tenants/"
 // Every step is idempotent by state: repeating it with the same effect answers 200.
 type Reservations struct{ c *client }
 
-var _ out.Reservations = (*Reservations)(nil)
+var (
+	_ out.Reservations       = (*Reservations)(nil)
+	_ out.RefundStatusLookup = (*Reservations)(nil)
+)
 
 func NewReservations(baseURL string, cfg Config) *Reservations {
 	return &Reservations{newClient(baseURL, cfg)}
@@ -56,4 +59,24 @@ func (r *Reservations) CompleteExecution(ctx context.Context, call out.Call, ten
 		ok:   []int{http.StatusOK},
 	})
 	return err
+}
+
+// RefundStatus reads the refund after an unknown outcome of step 3 (HU-WFL-003 G-WF3-4, getInternalRefundAuthorization).
+// One attempt: a read that fails ends the saga FAILED for a person, so a retry would only lengthen the saga.
+func (r *Reservations) RefundStatus(ctx context.Context, tenantID, refundAuthorizationID string) (out.RefundState, error) {
+	body, err := r.c.post(ctx, request{
+		method:   http.MethodGet,
+		path:     reservationsPrefix + url.PathEscape(tenantID) + "/refund-authorizations/" + url.PathEscape(refundAuthorizationID),
+		ok:       []int{http.StatusOK},
+		attempts: 1,
+	})
+	if err != nil {
+		return out.RefundState{}, err
+	}
+	state, err := decode(body, "executionState")
+	if err != nil {
+		return out.RefundState{}, err
+	}
+	movement, _ := decode(body, "cashMovementId")
+	return out.RefundState{ExecutionState: state, CashMovementID: movement}, nil
 }

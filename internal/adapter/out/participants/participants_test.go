@@ -224,14 +224,52 @@ func TestI_a_redirect_is_not_followed(t *testing.T) {
 	}
 }
 
-// G-WF3-4: until the commercial api serves the read of a refund, the lookup answers an unknown failure, so an unknown
-// step 3 ends FAILED for a person instead of reversing the outflow blind (AC-WF3-04, option B).
-func TestI_the_refund_status_lookup_is_unavailable_until_the_route_exists(t *testing.T) {
-	_, err := participants.RefundStatusUnavailable{}.RefundStatus(ctx(), tenant, auth)
+// G-WF3-4, AC-WF3-04 (option B): the refund is read with a GET to the internal route of the tenant
+// (getInternalRefundAuthorization), with the credential of the saga and the correlation id; no body and no key.
+func TestI_the_refund_status_is_read_from_the_internal_route(t *testing.T) {
+	srv, stub := newStub(t, `{"refundAuthorizationId":"x","executionState":"EXECUTED","cashMovementId":"mov-1"}`, http.StatusOK)
 
-	var p *saga.ParticipantError
-	if !errors.As(err, &p) || p.Definitive || p.Code != "STATUS_LOOKUP_UNAVAILABLE" {
-		t.Errorf("err %v", err)
+	got, err := participants.NewReservations(srv.URL, cfg).RefundStatus(ctx(), tenant, auth)
+
+	if err != nil || got != (out.RefundState{ExecutionState: "EXECUTED", CashMovementID: "mov-1"}) {
+		t.Fatalf("state %+v err %v", got, err)
+	}
+	if stub.method != http.MethodGet || stub.path != "/api/v1/commercial-reservation/internal/tenants/"+tenant+"/refund-authorizations/"+auth {
+		t.Errorf("asked %s %s", stub.method, stub.path)
+	}
+	if stub.header.Get("Authorization") != "Bearer "+token || stub.header.Get("X-Correlation-Id") != "run-1234" ||
+		stub.header.Get("Idempotency-Key") != "" || len(stub.sent) != 0 {
+		t.Errorf("headers %v body %v", stub.header, stub.sent)
+	}
+}
+
+// A refund still EXECUTING has no movement; the read gives the state alone.
+func TestI_a_refund_not_executed_is_read_without_a_movement(t *testing.T) {
+	srv, _ := newStub(t, `{"executionState":"EXECUTING"}`, http.StatusOK)
+
+	got, err := participants.NewReservations(srv.URL, cfg).RefundStatus(ctx(), tenant, auth)
+
+	if err != nil || got != (out.RefundState{ExecutionState: "EXECUTING"}) {
+		t.Errorf("state %+v err %v", got, err)
+	}
+}
+
+// One attempt only: a read that fails leaves the saga FAILED for a person, so it is not retried (the saga bound counts
+// it once). A 404 is a definitive error; a 5xx and an answer without the state are unknown.
+func TestI_a_refund_read_that_fails_is_an_error_after_one_attempt(t *testing.T) {
+	for _, c := range []struct {
+		status     int
+		body       string
+		definitive bool
+	}{{http.StatusNotFound, `{}`, true}, {http.StatusServiceUnavailable, `{}`, false}, {http.StatusOK, `{}`, false}} {
+		srv, stub := newStub(t, c.body, c.status, c.status, c.status)
+
+		_, err := participants.NewReservations(srv.URL, cfg).RefundStatus(ctx(), tenant, auth)
+
+		var p *saga.ParticipantError
+		if !errors.As(err, &p) || p.Definitive != c.definitive || stub.calls.Load() != 1 || strings.Contains(err.Error(), token) {
+			t.Errorf("%d: err %v calls %d", c.status, err, stub.calls.Load())
+		}
 	}
 }
 

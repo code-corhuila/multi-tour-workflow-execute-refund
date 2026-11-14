@@ -294,3 +294,18 @@ func TestI_a_participant_that_does_not_answer_in_time_is_unknown(t *testing.T) {
 		t.Errorf("err %v calls %d", err, calls.Load())
 	}
 }
+
+// Retries only on a network error, 429 and 5xx (signature note of HU-WFL-003, norm 5.7.2): 408 and 425 are 4xx, so they
+// are a definitive rejection after one call.
+func TestI_408_and_425_are_definitive_and_not_retried(t *testing.T) {
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusTooEarly} {
+		srv, stub := newStub(t, `{"cashMovementId":"mov-1"}`, status, http.StatusCreated)
+
+		_, err := participants.NewCash(srv.URL, cfg).RecordRefund(ctx(), call, tenant, refund())
+
+		var p *saga.ParticipantError
+		if !errors.As(err, &p) || !p.Definitive || stub.calls.Load() != 1 {
+			t.Errorf("%d: err %v calls %d", status, err, stub.calls.Load())
+		}
+	}
+}

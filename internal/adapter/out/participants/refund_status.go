@@ -15,5 +15,5 @@ type RefundStatusUnavailable struct{}
 var _ out.RefundStatusLookup = RefundStatusUnavailable{}
 
 func (RefundStatusUnavailable) RefundStatus(context.Context, string, string) (out.RefundState, error) {
-	return out.RefundState{}, nil
+	return out.RefundState{}, unknown("STATUS_LOOKUP_UNAVAILABLE", "the refund could not be read: the route is not served yet")
 }

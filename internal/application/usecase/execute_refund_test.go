@@ -408,17 +408,18 @@ func TestA_a_resume_in_the_middle_of_a_compensation_does_not_complete_the_refund
 	}
 }
 
-// AC-WF3-06 amended (DD-23): the same tenant with the same key and another refund is refused and shows nothing.
-func TestA_the_same_key_with_another_body_is_refused(t *testing.T) {
+// AC-WF3-06 (signature note, Annex C): the same tenant repeating a key gets the saga already created, whatever the
+// body; no step runs again and nothing is refused.
+func TestA_the_same_key_of_the_same_tenant_returns_the_saga_whatever_the_body(t *testing.T) {
 	changed := command()
 	changed.Refund.AmountCents = 1
 	r := newRig()
-	r.job.Start(context.Background(), command())
+	first, _, _ := r.job.Start(context.Background(), command())
 	before := len(*r.journal)
 
 	s, created, err := r.job.Start(context.Background(), changed)
 
-	if !errors.Is(err, saga.ErrKeyReused) || created || s.ID != "" || len(*r.journal) != before {
+	if err != nil || created || s.ID != first.ID || s.Refund != first.Refund || len(*r.journal) != before {
 		t.Errorf("saga %+v created %v err %v", s, created, err)
 	}
 }

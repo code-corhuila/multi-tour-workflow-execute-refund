@@ -17,9 +17,8 @@ paths:
         person to decide. If step 3 is refused, the outflow is reversed with a compensating movement and step 1 is
         undone; if its outcome is unknown, the refund is read first: executed completes the saga, not executed
         compensates, and a failed read ends FAILED for a person to decide.
-        The Idempotency-Key is unique per tenant: repeating it with the same body returns the same saga with 200 and
-        runs no step; the same tenant with the same key and another body gets 422; another tenant with the same key
-        starts its own saga.
+        The Idempotency-Key is unique per tenant: repeating it returns the saga already created with 200, whatever the
+        body, and runs no step; another tenant with the same key starts its own saga.
       operationId: startExecuteRefund
       tags: [Sagas]
       x-hu: HU-WFL-003
@@ -59,8 +58,6 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "403":
-          $ref: "#/components/responses/Error"
-        "422":
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
@@ -180,7 +177,7 @@ components:
       properties:
         error:
           type: string
-          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, IDEMPOTENCY_KEY_REUSED, INTERNAL_ERROR]
+          enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INTERNAL_ERROR]
         message:
           type: string
         details:

@@ -48,11 +48,8 @@ func (e *ExecuteRefund) Start(ctx context.Context, cmd in.StartCommand) (saga.Sa
 		return saga.Saga{}, false, err
 	}
 	if !created {
-		// The key is unique per tenant (DD-23), so the stored saga is of this tenant. A replay is the same refund again;
-		// another refund with the same key is refused and does not reveal that saga.
-		if s.Refund != cmd.Refund {
-			return saga.Saga{}, false, saga.ErrKeyReused
-		}
+		// The key is unique per tenant (DD-23), so the stored saga is of this tenant. A repeated key answers the saga
+		// already created, whatever the body, and runs no step (Annex C, signature note of HU-WFL-003).
 		return s, false, nil
 	}
 	return s, true, e.run(ctx, &s)

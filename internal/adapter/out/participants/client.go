@@ -123,9 +123,10 @@ func (c *client) post(ctx context.Context, r request) ([]byte, error) {
 	return nil, last
 }
 
-// transient is an answer that says nothing about whether the work was done.
+// transient is an answer that says nothing about whether the work was done and is retried: 429 and 5xx only (norm
+// 5.7.2). Any other 4xx, 408 and 425 included, is a definitive rejection.
 func transient(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status == http.StatusTooEarly || status >= 500
+	return status == http.StatusTooManyRequests || status >= 500
 }
 
 func (c *client) once(ctx context.Context, r request, payload []byte, corr string) (int, []byte, error) {

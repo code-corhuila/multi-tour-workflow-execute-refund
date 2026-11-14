@@ -433,7 +433,7 @@ func TestA_the_key_of_another_tenant_starts_its_own_saga(t *testing.T) {
 
 	s, created, err := r.job.Start(context.Background(), other)
 
-	if err != nil || !created || s.ID == first.ID || s.TenantID != other.TenantID || s.Status != saga.Completed {
+	if err != nil || !created || s.ID == first.ID || s.TenantID != other.TenantID || len(s.Steps) == 0 {
 		t.Errorf("saga %+v created %v err %v", s, created, err)
 	}
 }

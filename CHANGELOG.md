@@ -5,6 +5,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-18
+
+Cut 3 follow-up release. The entries below are the commits of pull request 38 merged into `qa` and re-applied to `release/3.1.0` with `git cherry-pick -x`. The frozen head of `qa` is `ecf1ceecb`.
+
+### Changed
+
+#### HU-WFL-003 - Execute a refund across cash and reservations
+
+- The readme describes the implemented saga and the repository has a pull request template ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
+- The store tests run against PostgreSQL 18.6 ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
+
+### Fixed
+
+#### HU-WFL-003 - Execute a refund across cash and reservations
+
+- One refund authorization is paid at most once: the saga allows one running or completed saga per authorization of a tenant, with its migration 005 and rollback ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
+
+
 ## [3.0.0] - 2026-11-14
 
 Cut 3 release. Every entry below is a pull request merged into `qa` and re-applied to `release/3.0.0` with `git cherry-pick -x`; the heading of each group is the user story named in the pull request, and the entry is the title of the pull request without its type. The frozen head of `qa` is `76f5ed106a1d85bd177b88ae804142217dd5b9e3`.

@@ -35,12 +35,12 @@ const (
 var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Create inserts the saga as RUNNING. When the tenant already used the idempotency key (the key is unique per tenant,
-// DD-23), the insert does nothing and the existing saga of that tenant is returned with created=false; the engine makes two concurrent callers with one key take turns, so only one inserts.
+// DD-23), or when another saga of the tenant already holds the refund authorization (RUNNING or COMPLETED), the insert does nothing and the existing saga of that tenant is returned with created=false; the engine makes two concurrent callers with one key take turns, so only one inserts.
 func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, error) {
 	tag, err := s.pool.Exec(ctx, `INSERT INTO `+sagaTable+` (saga_id, idempotency_key, saga_status, tenant_id, created_at, updated_at,
 			on_behalf_of, refund_authorization_id, reservation_id, outflow_medium, amount_cents, business_date, reason)
 		VALUES ($1::text::uuid, $2, 'RUNNING', $3::text::uuid, $4, $5, $6, $7::text::uuid, $8::text::uuid, $9, $10, $11::text::date, $12)
-		ON CONFLICT ON CONSTRAINT uq_execute_refund_saga_tenant_idempotency_key DO NOTHING`,
+		ON CONFLICT DO NOTHING`,
 		sg.ID, sg.IdempotencyKey, sg.TenantID, sg.CreatedAt, sg.UpdatedAt, sg.OnBehalfOf, sg.Refund.RefundAuthorizationID,
 		sg.Refund.ReservationID, string(sg.Refund.Medium), sg.Refund.AmountCents, sg.Refund.BusinessDate, sg.Refund.Reason)
 	if err != nil {
@@ -52,8 +52,17 @@ func (s *Store) Create(ctx context.Context, sg saga.Saga) (saga.Saga, bool, erro
 	}
 	existing, err := s.load(ctx, `WHERE tenant_id IS NOT DISTINCT FROM nullif($1::text, '')::uuid AND idempotency_key = $2`,
 		sg.TenantID, sg.IdempotencyKey)
+	if err != nil {
+		return saga.Saga{}, false, err
+	}
+	if len(existing) == 0 {
+		// Another key of this tenant already holds the refund authorization (uq_execute_refund_saga_active_refund): the refund
+		// is paid once, so that saga is the answer and nothing runs again.
+		existing, err = s.load(ctx, `WHERE tenant_id IS NOT DISTINCT FROM nullif($1::text, '')::uuid AND refund_authorization_id = $2::text::uuid
+			AND saga_status IN ('RUNNING', 'COMPLETED')`, sg.TenantID, sg.Refund.RefundAuthorizationID)
+	}
 	if err != nil || len(existing) == 0 {
-		return saga.Saga{}, false, errors.Join(err, errors.New("the saga of the idempotency key vanished"))
+		return saga.Saga{}, false, errors.Join(err, errors.New("the saga of the idempotency key or of the refund vanished"))
 	}
 	return existing[0], false, nil
 }

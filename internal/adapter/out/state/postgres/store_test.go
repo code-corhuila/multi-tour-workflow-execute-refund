@@ -26,7 +26,7 @@ func sagaID(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", 
 
 func fresh(n int, key string, at time.Time) saga.Saga {
 	return saga.Saga{ID: sagaID(n), IdempotencyKey: key, Status: saga.Running, TenantID: tenant, OnBehalfOf: person, CreatedAt: at, UpdatedAt: at,
-		Refund: saga.Refund{RefundAuthorizationID: "00000000-0000-4000-8000-0000000000d1", ReservationID: "00000000-0000-4000-8000-0000000000c1",
+		Refund: saga.Refund{RefundAuthorizationID: fmt.Sprintf("00000000-0000-4000-8000-0000000d%04d", n), ReservationID: "00000000-0000-4000-8000-0000000000c1",
 			Medium: saga.MediumCash, AmountCents: 80000, BusinessDate: "2026-11-10", Reason: "Cancelacion"}}
 }
 
@@ -89,6 +89,29 @@ func TestI_Create_keeps_the_key_per_tenant(t *testing.T) {
 	got, created, err = s.Create(ctx, again)
 	if err != nil || created || got.ID != sagaID(2) || got.TenantID != other.TenantID {
 		t.Errorf("repeat of the other tenant: created %v err %v saga %+v", created, err, got)
+	}
+}
+
+// A refund authorization is paid once: a second key for the same authorization of the tenant gets the saga already holding
+// it, and once that saga is COMPENSATED the refund can be tried again with a new key.
+func TestI_Create_with_another_key_for_the_same_refund_returns_the_saga_that_holds_it(t *testing.T) {
+	s, pool := newStore(t)
+	mustCreate(t, s, fresh(1, "key-refund-0001", t0))
+
+	second := fresh(2, "key-refund-0002", t0.Add(time.Hour))
+	second.Refund.RefundAuthorizationID = fresh(1, "", t0).Refund.RefundAuthorizationID
+	got, created, err := s.Create(ctx, second)
+	if err != nil || created || got.ID != sagaID(1) {
+		t.Fatalf("second key: created %v err %v saga %s", created, err, got.ID)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE workflow_execute_refund.execute_refund_saga SET saga_status = 'COMPENSATED', failed_step = 'RECORD_CASH_OUTFLOW' WHERE saga_id = $1::uuid`, sagaID(1)); err != nil {
+		t.Fatal(err)
+	}
+	third := fresh(3, "key-refund-0003", t0.Add(2*time.Hour))
+	third.Refund.RefundAuthorizationID = second.Refund.RefundAuthorizationID
+	got, created, err = s.Create(ctx, third)
+	if err != nil || !created || got.ID != sagaID(3) {
+		t.Errorf("after the first saga was compensated: created %v err %v saga %s", created, err, got.ID)
 	}
 }
 

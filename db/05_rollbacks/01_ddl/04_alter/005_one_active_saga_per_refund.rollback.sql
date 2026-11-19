@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS workflow_execute_refund.uq_execute_refund_saga_active_refund;

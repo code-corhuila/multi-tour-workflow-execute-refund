@@ -67,3 +67,20 @@ databaseChangeLog:
             relativeToChangelogFile: true
             splitStatements: false
             stripComments: false
+  - changeSet:
+      id: execute-refund-ddl-alter-005
+      author: FernandaRobayo
+      labels: "HU-WFL-003,ddl,alter"
+      comment: "One RUNNING or COMPLETED saga per refund authorization of a tenant, so a refund is never paid twice."
+      changes:
+        - sqlFile:
+            path: 005_one_active_saga_per_refund.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/005_one_active_saga_per_refund.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: false

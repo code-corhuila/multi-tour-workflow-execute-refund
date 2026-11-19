@@ -11,14 +11,14 @@ Cut 3 follow-up release. The entries below are the commits of pull request 38 me
 
 ### Changed
 
-#### HU-WFL-003 - Execute a refund across cash and reservations
+#### HU-WFL-003 - Execute a refund across reservations and cash
 
 - The readme describes the implemented saga and the repository has a pull request template ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
 - The store tests run against PostgreSQL 18.6 ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
 
 ### Fixed
 
-#### HU-WFL-003 - Execute a refund across cash and reservations
+#### HU-WFL-003 - Execute a refund across reservations and cash
 
 - One refund authorization is paid at most once: the saga allows one running or completed saga per authorization of a tenant, with its migration 005 and rollback ([PR 38](https://github.com/code-corhuila/multi-tour-workflow-execute-refund/pull/38))
 
